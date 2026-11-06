@@ -1,8 +1,10 @@
 # Input contract and accounting workpapers
 
-This is a scoped consolidation workpaper engine for a parent with wholly owned
-foreign operations held from formation. It is not an IFRS compliance opinion or
-a finished set of statutory financial statements.
+This guide describes the single-period workpaper engine for a parent with wholly owned
+foreign operations held from formation. Its optional annual reporting layer adds the
+comparative statutory statement components for a defined Canadian service-group
+profile, documented in [statutory.md](statutory.md). Neither mode provides an audit
+or professional compliance opinion.
 
 ## Basis and scope
 
@@ -73,8 +75,10 @@ The chart is intentionally explicit:
 | `ic_service_revenue`, `ic_service_expense` | Average |
 
 Unknown accounts block the close. This avoids silently dropping an unfamiliar
-account from a statement. This chart does not classify current/non-current items
-or implement all IFRS presentation requirements. Statement expense lines are
+account from a statement. The base workpaper chart does not itself classify current/non-current items.
+The annual layer implements that presentation and supporting comparative notes for
+its supported cash-only service-group profile; other material accounts are rejected
+until the annual profile and disclosures are extended. Statement expense lines are
 positive deductions; fact-table and journal amounts keep debit/credit signs.
 
 ## Reconciliation sequence

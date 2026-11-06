@@ -9,6 +9,7 @@ from collections import defaultdict
 from decimal import Decimal
 from pathlib import Path
 
+from .annual import build_annual
 from .model import ACCOUNTS, CloseError, Entry, consolidate, roll_up_plan
 
 MANUAL_CHECKS = (
@@ -16,7 +17,7 @@ MANUAL_CHECKS = (
     "Approve historical equity rates and opening retained earnings/translation reserves",
     "Confirm control, formation-only ownership, and fully consumed intercompany services",
     "Review local ledgers, tax, cut-off, classifications and disclosure requirements",
-    "Prepare cash flow, changes in equity, comparatives and notes before statutory sign-off",
+    "Review cash flows, changes in equity, comparatives and notes before statutory sign-off",
 )
 
 
@@ -33,7 +34,7 @@ def read_csv(path):
 
 def write_csv(path, rows, fields):
     with Path(path).open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         for row in rows:
             writer.writerow(
@@ -63,7 +64,7 @@ def checklist(output, checks):
     )
 
 
-def export_pack(output, config, actual, plans):
+def export_pack(output, config, actual, plans, annual=None):
     write_csv(output / "statement_of_financial_position.csv", actual.position, ["line", "amount"])
     write_csv(output / "income_statement_and_oci.csv", actual.income, ["line", "amount"])
     write_csv(
@@ -133,6 +134,41 @@ def export_pack(output, config, actual, plans):
                 for row in result.income
                 if row["line"] not in ("translation_oci", "total_comprehensive_income")
             )
+    if annual is not None:
+        checks.extend(
+            {"scenario": "Actual", "period": config["period"], **c} for c in annual.checks
+        )
+        report = [
+            f"# {annual.title}",
+            "",
+            "Consolidated annual financial statements. CAD; synthetic, unaudited, for review.",
+            "",
+        ]
+        for name, table in annual.tables.items():
+            fields = list(table[0])
+            write_csv(output / name, table, fields)
+            report += [
+                f"## {name.removesuffix('.csv').replace('_', ' ')}",
+                "",
+                "| " + " | ".join(fields) + " |",
+                "| " + " | ".join("---" for _ in fields) + " |",
+            ]
+            report += [
+                "| "
+                + " | ".join(
+                    (f"{100 * r[f]:.1f}%" if f == "rate" else f"{r[f]:,.2f}")
+                    if isinstance(r[f], Decimal)
+                    else str(r[f])
+                    for f in fields
+                )
+                + " |"
+                for r in table
+            ]
+            report.append("")
+        (output / "annual_notes.md").write_text(annual.notes, encoding="utf-8")
+        (output / "annual_financial_statements.md").write_text(
+            "\n".join(report) + "\n" + annual.notes, encoding="utf-8"
+        )
     write_csv(
         output / "translated_ledger.csv",
         translated,
@@ -206,7 +242,14 @@ def export_pack(output, config, actual, plans):
     periods = sorted({period for _, period in all_results})
     write_csv(
         output / "dim_period.csv",
-        [{"period": p, "grain": "month" if "-" in p else "year", "year": p[:4]} for p in periods],
+        [
+            {
+                "period": p,
+                "grain": "month" if "-" in p and annual is None else "year",
+                "year": p[:4],
+            }
+            for p in periods
+        ],
         ["period", "grain", "year"],
     )
     write_csv(
@@ -233,6 +276,11 @@ def main(argv=None):
         required=True,
         help="New output folder (existing folders are protected)",
     )
+    parser.add_argument(
+        "--statutory",
+        action="store_true",
+        help="Also reconcile and produce comparative annual statements and notes",
+    )
     args = parser.parse_args(argv)
     try:
         args.output.mkdir(parents=True, exist_ok=False)
@@ -246,7 +294,40 @@ def main(argv=None):
             [Entry.from_row(r) for r in read_csv(args.input / "ledger.csv")], config
         )
         plans = roll_up_plan(read_csv(args.input / "plan.csv"), config)
-    except (CloseError, OSError, KeyError, TypeError, json.JSONDecodeError) as error:
+        annual = None
+        extra_sources = []
+        if args.statutory:
+            extra_sources = [
+                "comparative_config.json",
+                "comparative_ledger.csv",
+                "opening_config.json",
+                "opening_ledger.csv",
+                "statutory.json",
+                "cash_movements.csv",
+                "equity_movements.csv",
+            ]
+            comparative_config = json.loads((args.input / "comparative_config.json").read_text())
+            opening_config = json.loads((args.input / "opening_config.json").read_text())
+            comparative = consolidate(
+                [Entry.from_row(r) for r in read_csv(args.input / "comparative_ledger.csv")],
+                comparative_config,
+            )
+            opening = consolidate(
+                [Entry.from_row(r) for r in read_csv(args.input / "opening_ledger.csv")],
+                opening_config,
+            )
+            annual = build_annual(
+                actual,
+                comparative,
+                opening,
+                config,
+                comparative_config,
+                opening_config,
+                json.loads((args.input / "statutory.json").read_text()),
+                read_csv(args.input / "cash_movements.csv"),
+                read_csv(args.input / "equity_movements.csv"),
+            )
+    except (ValueError, OSError, KeyError, TypeError) as error:
         message = str(error)
         checklist(args.output, [{"check": message, "status": "FAIL", "difference": ""}])
         write_csv(
@@ -262,7 +343,7 @@ def main(argv=None):
             file=sys.stderr,
         )
         return 1
-    count = export_pack(args.output, config, actual, plans)
+    count = export_pack(args.output, config, actual, plans, annual)
     status = {
         "status": "REVIEW_REQUIRED",
         "automated_checks_passed": count,
@@ -272,9 +353,14 @@ def main(argv=None):
         "plan_groups": len(plans),
         "source_sha256": {
             name: hashlib.sha256((args.input / name).read_bytes()).hexdigest()
-            for name in ("config.json", "ledger.csv", "plan.csv")
+            for name in ["config.json", "ledger.csv", "plan.csv"] + extra_sources
         },
-        "note": "Workpapers only. Not a complete IFRS statutory reporting package.",
+        "note": (
+            "Comparative Canadian IFRS annual statement illustration; "
+            "requires professional review and authorisation."
+            if annual
+            else "Workpapers only. Not a complete IFRS statutory reporting package."
+        ),
     }
     (args.output / "status.json").write_text(json.dumps(status, indent=2) + "\n")
     print(
