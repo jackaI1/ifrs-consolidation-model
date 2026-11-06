@@ -16,9 +16,11 @@ include a Power BI desktop report or claim a live service deployment.
 3. Create one-to-many, single-direction relationships from each dimension's key to
    the matching fact column: entity, account, period and scenario. Dimension keys
    are unique. There is one fact per `(scenario, period, entity, account, stage)`.
-4. Use scenario and period slicers. Actual is an October monthly close. Base and
-   Downside are annual income-only plans for 2027 to 2029. A year is not directly
-   comparable to the actual month; do not sum actual and planned periods together.
+4. Use scenario and period slicers. Actual is the October monthly close in the original example, or the full
+   year ended October in annual mode. The dimension grain identifies which. Base and
+   Downside are annual income-only plans for 2027 to 2029. An annual plan is not directly comparable to an actual month; do not sum
+   actual and planned periods together. The annual mode uses the `2026-10` key
+   for its October year-end and labels its grain as year.
 5. Filter `stage = consolidated` and `entity = GROUP` for a group statement. For an
    audit bridge, use the entity rows at `translated` plus `elimination`, comparing
    their sum against the group consolidated stage. Summing all stages together
