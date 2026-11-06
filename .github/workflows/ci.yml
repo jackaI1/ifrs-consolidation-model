@@ -1,0 +1,27 @@
+name: Consolidation checks
+on:
+  push:
+    branches: [main, 'skills/**']
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -e '.[dev]'
+      - run: ruff check .
+      - run: python -m pytest -q
+      - run: ifrs-close --input examples/three_subs --output output/demo
+      - uses: actions/upload-artifact@v4
+        with:
+          name: close-pack-python-${{ matrix.python }}
+          path: output/demo/
